@@ -1,0 +1,116 @@
+name: Build and Release Nuitka Executables
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on push to a tag like v1.0.0, v1.0.1, etc.
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12'] # Test with different Python versions
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip' # Cache pip dependencies for faster builds
+          # Assuming you don't have a requirements.txt yet,
+          # if you add one later, uncomment and set path:
+          # cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies (if any)
+        # If your ledger_ageing_gui.py has external dependencies (like pandas, openpyxl, PyQt, Tkinter etc.)
+        # you MUST create a requirements.txt file in your repository root like this:
+        #
+        # # requirements.txt
+        # pandas==2.2.0
+        # openpyxl==3.1.2
+        # PySide6==6.5.0 # Example for Qt GUI
+        #
+        # Then, uncomment the following line:
+        # run: pip install -r requirements.txt
+        run: pip install nuitka # Nuitka itself is a dependency for the build process
+
+      - name: Compile with Nuitka (Standalone) - ${{ matrix.os }}
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          script-name: ledger_ageing_gui.py # <--- Your main Python script
+          mode: standalone # Or 'onefile' if you prefer a single executable
+
+          # --- Handle the icon ---
+          # For Windows, use the favicon.ico as the executable icon
+          windows-icon-from-ico: favicon.ico
+
+          # --- For GUI apps on Windows, prevent console window ---
+          # If ledger_ageing_gui.py is a graphical application (Tkinter, PyQt, Kivy, etc.),
+          # and you don't want a console window to appear when running it on Windows:
+          # enable-plugins: |
+          #   no-console
+          # This line above will disable the console window for Windows builds.
+          # Make sure to uncomment it if your app is a GUI.
+
+          # Add other Nuitka options as needed, e.g.:
+          # follow-imports: true # This is the default for Nuitka-Action, but good to be aware of.
+          # output-filename: LedgerAgeingApp # Optional: Set a custom name for the executable/dist folder
+
+      - name: List compiled files for debugging
+        # This helps verify what Nuitka produced
+        run: |
+          echo "Contents of current directory:"
+          ls -F
+          echo "Contents of .dist folder (if standalone):"
+          # Find the .dist folder (its name will be based on script-name unless output-filename is used)
+          ls -F *.dist/ || echo "No .dist folder found (might be onefile mode)"
+
+
+      - name: Upload Nuitka artifact - ${{ matrix.os }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-python-${{ matrix.python-version }}-build
+          path: |
+            # Adjust path based on Nuitka output (standalone vs onefile)
+            *.dist/ # For standalone mode, uploads the entire .dist folder
+            *.exe # For onefile mode (on Windows)
+            *.bin # For onefile mode (on Linux/macOS)
+          retention-days: 7 # How long to keep the artifact for debugging
+
+  release:
+    needs: build # This job runs only after all 'build' jobs are successful
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') # Only run if the workflow was triggered by a tag push
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release_artifacts # Downloads all artifacts into this directory
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is automatically provided by GitHub
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./release_artifacts/*/* # Uploads all files from the downloaded artifacts
+            # If you want to include the original favicon.ico in the release assets too
+            # favicon.ico
+          token: ${{ secrets.GITHUB_TOKEN }}
